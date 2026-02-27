@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <style>
+        body {
+            font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+            color: #1f2933;
+            padding: 32px;
+            font-size: 13px;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 32px;
+            border-bottom: 2px solid #2563eb;
+            padding-bottom: 16px;
+        }
+        .logo {
+            max-height: 56px;
+        }
+        .section-title {
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            font-size: 11px;
+            color: #64748b;
+            margin-bottom: 4px;
+        }
+        .card {
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 20px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 12px;
+        }
+        th, td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #e2e8f0;
+            text-align: left;
+        }
+        th {
+            background: #f8fafc;
+            font-size: 12px;
+            color: #475569;
+        }
+        .totals td {
+            font-weight: 600;
+        }
+        .text-right {
+            text-align: right;
+        }
+        .muted {
+            color: #94a3b8;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <div class="section-title">Invoice</div>
+            <h1>#{{ invoice.invoice_number }}</h1>
+            <div class="muted">Generated {{ invoice.generated_at|date:"d M Y, H:i" }}</div>
+        </div>
+        <div>
+            {% if company.logo_url %}
+                <img src="{{ company.logo_url }}" alt="Company Logo" class="logo" />
+            {% else %}
+                <strong>{{ company.name }}</strong>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="section-title">Billed To</div>
+        <strong>{{ invoice.billing_name }}</strong><br />
+        {% if invoice.billing_address %}{{ invoice.billing_address|linebreaksbr }}<br />{% endif %}
+        {% if invoice.gstin %}GSTIN: {{ invoice.gstin }}<br />{% endif %}
+    </div>
+
+    <div class="card">
+        <div class="section-title">Issued By</div>
+        <strong>{{ company.name }}</strong><br />
+        {% if company.address %}{{ company.address|linebreaksbr }}<br />{% endif %}
+        {% if company.gstin %}GSTIN: {{ company.gstin }}<br />{% endif %}
+    </div>
+
+    <div class="card">
+        <div class="section-title">Subscription</div>
+        Plan: <strong>{{ plan.name }}</strong><br />
+        Start Date: {{ subscription.start_date|date:"d M Y" }}<br />
+        Expiry Date: {{ subscription.expiry_date|date:"d M Y" }}<br />
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Description</th>
+                <th class="text-right">Amount (INR)</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>{{ plan.name }} subscription</td>
+                <td class="text-right">{{ invoice.amount }}</td>
+            </tr>
+            <tr>
+                <td>GST @ {{ invoice.gst_percentage }}%</td>
+                <td class="text-right">{{ invoice.gst_amount }}</td>
+            </tr>
+        </tbody>
+        <tfoot>
+            <tr class="totals">
+                <td>Total Payable</td>
+                <td class="text-right">{{ invoice.total_amount }}</td>
+            </tr>
+        </tfoot>
+    </table>
+
+    <div class="card">
+        <div class="section-title">Payment Details</div>
+        Status: {{ invoice.paid_status|title }}<br />
+        {% if invoice.paid_at %}Paid On: {{ invoice.paid_at|date:"d M Y, H:i" }}<br />{% endif %}
+        Due Date: {{ invoice.due_date|date:"d M Y" }}<br />
+        {% if transaction %}Razorpay Payment ID: {{ transaction.razorpay_payment_id }}{% endif %}
+    </div>
+
+    <p class="muted">This is a system generated GST invoice. No signature is required.</p>
+</body>
+</html>

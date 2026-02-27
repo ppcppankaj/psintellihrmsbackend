@@ -1,0 +1,13 @@
+{% extends "emails/base.html" %}
+{% block content %}
+  <p>Hi {{ organization_name }},</p>
+  <p>This is a final reminder that your <strong>{{ plan_name }}</strong> subscription expires tomorrow ({{ expiry_date }}).</p>
+  <p>Please complete your renewal today to avoid entering the grace window and risking service interruptions.</p>
+  {% if renewal_link %}
+    <p style="margin: 24px 0;">
+      <a href="{{ renewal_link }}" class="btn">Pay &amp; Renew</a>
+    </p>
+  {% endif %}
+  <p>Need help with invoices or purchase orders? Reply to this email and our billing team will assist you.</p>
+  <p>Regards,<br/>HRMS Billing Desk</p>
+{% endblock %}

@@ -1,0 +1,8 @@
+# Production requirements
+-r base.txt
+
+# WSGI / ASGI
+gunicorn>=21.2
+
+# Monitoring
+django-prometheus>=2.3

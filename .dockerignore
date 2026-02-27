@@ -1,0 +1,52 @@
+# =============================================================================
+# PS IntelliHR — Docker Build Ignore
+# =============================================================================
+
+# Version control
+.git
+.gitignore
+
+# Python bytecode & caching
+__pycache__
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+htmlcov/
+.coverage
+
+# Virtual environments
+.venv
+venv
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment (injected at runtime via .env)
+.env
+.env.*
+!.env.example
+
+# Media & logs (mounted as Docker volumes)
+media/
+logs/
+*.log
+
+# Database
+db.sqlite3
+*.sqlite3
+
+# Backup files
+*.bak
+*.backup
+
+# Temp
+error_traceback.html

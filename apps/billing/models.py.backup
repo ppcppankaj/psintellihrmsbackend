@@ -1,0 +1,116 @@
+from django.db import models
+from apps.core.models import EnterpriseModel
+
+class BankDetails(EnterpriseModel):
+    """Admin Bank Details for receiving payments (Singleton-ish)"""
+    account_name = models.CharField(max_length=255)
+    account_number = models.CharField(max_length=50)
+    bank_name = models.CharField(max_length=255)
+    ifsc_code = models.CharField(max_length=20)
+    swift_code = models.CharField(max_length=20, blank=True, null=True)
+    branch_name = models.CharField(max_length=255, blank=True, null=True)
+    
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name_plural = "Bank Details"
+
+    def __str__(self):
+        return f"{self.bank_name} - {self.account_number}"
+
+
+class Plan(EnterpriseModel):
+    """Subscription plans"""
+    name = models.CharField(max_length=100)
+    code = models.CharField(max_length=20, unique=True)
+    description = models.TextField(blank=True)
+    
+    price_monthly = models.DecimalField(max_digits=10, decimal_places=2)
+    price_yearly = models.DecimalField(max_digits=10, decimal_places=2)
+    
+    max_employees = models.PositiveIntegerField(null=True, blank=True)
+    max_admins = models.PositiveIntegerField(null=True, blank=True)
+    
+    features = models.JSONField(default=dict)  # {'payroll': True, 'recruitment': True}
+    
+    is_trial = models.BooleanField(default=False)
+    trial_days = models.PositiveSmallIntegerField(default=14)
+    
+    class Meta:
+        ordering = ['price_monthly']
+    
+    def __str__(self):
+        return self.name
+
+class Subscription(EnterpriseModel):
+    """Organization subscriptions"""
+    organization = models.OneToOneField('core.Organization', on_delete=models.CASCADE, related_name='subscription')
+    plan = models.ForeignKey(Plan, on_delete=models.PROTECT)
+    
+    billing_cycle = models.CharField(max_length=10, choices=[('monthly', 'Monthly'), ('yearly', 'Yearly')])
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    
+    start_date = models.DateField()
+    end_date = models.DateField()
+    next_billing_date = models.DateField()
+    
+    status = models.CharField(max_length=20, choices=[
+        ('trial', 'Trial'), ('active', 'Active'), ('past_due', 'Past Due'),
+        ('cancelled', 'Cancelled'), ('expired', 'Expired')
+    ], default='trial')
+    
+    payment_method = models.JSONField(default=dict, blank=True)
+    
+    class Meta:
+        ordering = ['-start_date']
+    
+    def __str__(self):
+        return f"{self.organization.name} - {self.plan.name}"
+
+class Invoice(EnterpriseModel):
+    """Billing invoices"""
+    subscription = models.ForeignKey(Subscription, on_delete=models.CASCADE, related_name='invoices')
+    
+    invoice_number = models.CharField(max_length=50, unique=True)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    tax = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    total = models.DecimalField(max_digits=10, decimal_places=2)
+    
+    billing_period_start = models.DateField()
+    billing_period_end = models.DateField()
+    
+    status = models.CharField(max_length=20, choices=[
+        ('draft', 'Draft'), ('pending', 'Pending'), ('paid', 'Paid'),
+        ('failed', 'Failed'), ('refunded', 'Refunded')
+    ], default='pending')
+    
+    due_date = models.DateField()
+    paid_at = models.DateTimeField(null=True, blank=True)
+    
+    pdf_file = models.FileField(upload_to='invoices/', null=True, blank=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return self.invoice_number
+
+class Payment(EnterpriseModel):
+    """Payment transactions"""
+    invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name='payments')
+    
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    payment_method = models.CharField(max_length=50)
+    transaction_id = models.CharField(max_length=100, unique=True)
+    
+    status = models.CharField(max_length=20, choices=[
+        ('pending', 'Pending'), ('success', 'Success'), ('failed', 'Failed'), ('refunded', 'Refunded')
+    ])
+    
+    gateway_response = models.JSONField(default=dict)
+    
+    class Meta:
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.invoice.invoice_number} - {self.amount}"

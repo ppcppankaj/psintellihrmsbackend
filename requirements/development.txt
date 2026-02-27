@@ -1,0 +1,4 @@
+-r base.txt
+
+# Debugging
+django-debug-toolbar>=4.3

@@ -1,0 +1,13 @@
+{% extends "emails/base.html" %}
+{% block content %}
+  <p>Hi {{ organization_name }},</p>
+  <p>Your <strong>{{ plan_name }}</strong> subscription has been suspended because the grace period ended on {{ grace_end_date }} without a renewal.</p>
+  <p>All premium services are currently disabled. Renew immediately to reactivate access and preserve your settings.</p>
+  {% if renewal_link %}
+    <p style="margin: 24px 0;">
+      <a href="{{ renewal_link }}" class="btn">Renew &amp; Reactivate</a>
+    </p>
+  {% endif %}
+  <p>Need assistance? Reply to this email and our billing team will help you finalize the payment.</p>
+  <p>Regards,<br/>HRMS Billing Desk</p>
+{% endblock %}

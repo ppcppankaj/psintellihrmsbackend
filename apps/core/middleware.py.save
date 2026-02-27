@@ -1,0 +1,346 @@
+"""
+Organization Middleware - Single Source of Truth for Organization and Branch Resolution
+SECURITY: This middleware handles context resolution and safety guards.
+"""
+
+import logging
+import uuid
+import re
+import time
+from typing import Any, Optional
+from django.conf import settings
+from django.http import JsonResponse, HttpRequest, HttpResponse
+from django.utils.deprecation import MiddlewareMixin
+from django.core.exceptions import ValidationError, ImproperlyConfigured, PermissionDenied
+from apps.core.logging import set_correlation_id
+from rest_framework_simplejwt.authentication import JWTAuthentication
+
+from apps.core.models import Organization
+
+from .context import (
+    get_current_organization, set_current_organization,
+    get_current_user, set_current_user,
+    get_current_branch, set_current_branch,
+    get_client_ip, set_client_ip,
+    get_user_agent, set_user_agent,
+    get_device_id, set_device_id,
+    clear_context
+)
+
+logger = logging.getLogger(__name__)
+
+
+def is_schema_request(request):
+    return getattr(request, "swagger_fake_view", False)
+
+
+# ============================================================================
+# VALIDATION GUARD (DEFENSE-IN-DEPTH)
+# ============================================================================
+
+class OrganizationAuthMiddleware(MiddlewareMixin):
+    """
+    Validation guard: Ensure organization context matches user's assigned organization.
+    This is defense-in-depth; primary enforcement is in OrganizationMiddleware.
+    """
+
+    def process_request(self, request: HttpRequest) -> Optional[HttpResponse]:
+        public_paths = ['/api/health/', '/api/v1/auth/', '/admin/']
+        if any(request.path.startswith(p) for p in public_paths):
+            return None
+
+        if not hasattr(request, 'user') or not request.user.is_authenticated:
+            return None
+
+        if request.user.is_superuser:
+            return None
+
+        org = get_current_organization()
+        if not org:
+            logger.error("SECURITY: Organization context missing after auth")
+            return JsonResponse({
+                'error': 'organization_missing',
+                'message': 'Organization context is missing.'
+            }, status=403)
+
+        return None
+
+
+# ============================================================================
+# AUDIT & METADATA MIDDLEWARE
+# ============================================================================
+
+class AuditMiddleware(MiddlewareMixin):
+    """
+    Captures request metadata and stores in context for audit logging.
+    """
+
+    def process_request(self, request: HttpRequest) -> None:
+        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        if x_forwarded_for:
+            ip = x_forwarded_for.split(',')[0].strip()
+        else:
+            ip = request.META.get('REMOTE_ADDR', '')
+
+        request.client_ip = ip
+        request.user_agent = request.META.get('HTTP_USER_AGENT', '')
+        request.device_id = request.META.get('HTTP_X_DEVICE_ID', '')
+
+        set_client_ip(ip)
+        set_user_agent(request.user_agent)
+        set_device_id(request.device_id)
+
+        return None
+
+
+# ============================================================================
+# SECURITY HEADERS
+# ============================================================================
+
+class SecurityHeadersMiddleware(MiddlewareMixin):
+    """
+    Adds security headers to all responses.
+    """
+
+    def process_response(self, request: HttpRequest, response: HttpResponse) -> HttpResponse:
+        if request.path.startswith('/admin') or request.path.startswith('/api/docs') or request.path.startswith('/api/redoc'):
+            response['Content-Security-Policy'] = (
+                "default-src 'self' 'unsafe-inline'; "
+                "script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; "
+                "font-src 'self' data:; "
+                "frame-ancestors 'none'"
+            )
+        else:
+            response['Content-Security-Policy'] = "default-src 'self'; frame-ancestors 'none'"
+
+        response['X-Content-Type-Options'] = 'nosniff'
+        response['X-XSS-Protection'] = '1; mode=block'
+        response['X-Frame-Options'] = 'DENY'
+        response['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        response['Permissions-Policy'] = 'geolocation=(self), camera=(self), microphone=()'
+
+        return response
+
+
+# ============================================================================
+# INPUT SANITIZATION
+# ============================================================================
+
+class InputSanitizationMiddleware(MiddlewareMixin):
+    """Sanitize incoming request data to prevent XSS and basic injection."""
+
+    def process_request(self, request: HttpRequest) -> None:
+        if request.method in ('POST', 'PUT', 'PATCH'):
+            for key, value in request.POST.items():
+                if isinstance(value, str) and re.search(
+                    r'<script|onerror|onload|javascript:',
+                    value,
+                    re.IGNORECASE
+                ):
+                    raise ValidationError(f"Invalid input detected in field: {key}")
+        return None
+
+
+# ============================================================================
+# CORRELATION ID
+# ============================================================================
+
+class CorrelationIdMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        correlation_id = request.headers.get(
+            'X-Correlation-ID', str(uuid.uuid4())
+        )
+        set_correlation_id(correlation_id)
+        response = self.get_response(request)
+        response['X-Correlation-ID'] = correlation_id
+        return response
+
+
+# ============================================================================
+# CONTEXT ACCESSORS (UNCHANGED)
+# ============================================================================
+
+def get_client_ip():
+    from .context import get_client_ip as _get_ip
+    return _get_ip()
+
+
+def get_user_agent():
+    from .context import get_user_agent as _get_ua
+    return _get_ua()
+
+
+def get_device_id():
+    from .context import get_device_id as _get_id
+    return _get_id()
+
+
+# ============================================================================
+# BRANCH CONTEXT (STRICT, NO ORG FALLBACK)
+# ============================================================================
+
+class BranchContextMiddleware(MiddlewareMixin):
+    """
+    Middleware to automatically set branch context for authenticated users.
+    Organization MUST already be resolved.
+    """
+
+    def process_request(self, request):
+        public_paths = ['/api/health/', '/api/v1/auth/', '/admin/']
+        if any(request.path.startswith(p) for p in public_paths):
+            return
+
+        if not hasattr(request, 'user') or not request.user.is_authenticated:
+            return
+
+        # NEW: Skip if Organization context is missing (prevents 500)
+        if not getattr(request, 'organization', None):
+            # This is normal for initial Requests before Auth, or if Auth failed
+            # But wait, request.user IS authenticated here?
+            # If so, it might be Session Auth without Organization Context
+            logger.info("TRACE: BranchContextMiddleware skipping - No Organization Context")
+            return
+
+        try:
+            logger.info(f"TRACE: BranchContextMiddleware processing for user {request.user.email}")
+            
+            # Helper to set branch context
+            from apps.core.context import set_current_branch
+            
+            # 1. Check if user has a specific branch set in session
+            branch_id = request.session.get('current_branch_id')
+            
+            if branch_id:
+                from apps.authentication.models import Branch
+                try:
+                    logger.info(f"TRACE: BranchContextMiddleware looking up branch {branch_id}")
+                    # Validate branch belongs to current organization
+                    branch = Branch.objects.get(
+                        id=branch_id,
+                        organization=request.organization,
+                        is_active=True
+                    )
+                    
+                    # Verify user has access to this branch
+                    if request.user.branches.filter(id=branch.id).exists():
+                        request.branch = branch
+                        set_current_branch(branch)
+                        logger.info(f"TRACE: BranchContextMiddleware set branch {branch.name}")
+                        return
+                    else:
+                         logger.warning(f"TRACE: BranchContextMiddleware user {request.user.email} has no access to branch {branch_id}")
+                except Branch.DoesNotExist:
+                    logger.warning(f"TRACE: BranchContextMiddleware branch {branch_id} not found or inactive")
+                    pass
+                except Exception as e:
+                    logger.error(f"TRACE: BranchContextMiddleware error looking up branch: {e}")
+
+            # 2. Fallback: Use user's primary/default branch if available
+            # Note: We don't automatically set a tailored default here yet,
+            # we just ensure context is clean if no selection.
+            # If we wanted to, we could pick the first available branch.
+            
+            request.branch = None
+            logger.info("TRACE: BranchContextMiddleware finished (no branch set)")
+            
+        except Exception as e:
+            logger.error(f"TRACE: BranchContextMiddleware critical error: {e}")
+            # Do not crash the request
+
+    def _get_user_primary_branch(self, user):
+        """
+        Get the user's primary branch from BranchUser or Employee models.
+        """
+        try:
+            from apps.authentication.models import BranchUser
+            branch_membership = BranchUser.objects.filter(
+                user=user,
+                is_active=True
+            ).select_related('branch').first()
+
+            if branch_membership:
+                return branch_membership.branch
+        except Exception:
+            pass
+
+        try:
+            from apps.employees.models import Employee
+            employee = Employee.objects.filter(
+                user=user,
+                is_active=True
+            ).select_related('branch').first()
+
+            if employee and employee.branch:
+                return employee.branch
+        except Exception:
+            pass
+
+        return None
+
+class RequestIDMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        request.request_id = request.headers.get(
+            'X-Request-ID',
+            str(uuid.uuid4())
+        )
+        response = self.get_response(request)
+        response['X-Request-ID'] = request.request_id
+        return response
+
+
+# ============================================================================
+# METRICS / LATENCY LOGGING
+# ============================================================================
+
+class MetricsMiddleware:
+    """
+    Log basic request metrics (latency, status, user, org).
+    Additive-only: does not modify request behavior.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        start = time.monotonic()
+        response = self.get_response(request)
+        duration_ms = int((time.monotonic() - start) * 1000)
+
+        user = getattr(request, 'user', None)
+        org = None
+        if user and hasattr(user, 'get_organization'):
+            org = user.get_organization()
+
+        logger.info(
+            "request_metrics method=%s path=%s status=%s duration_ms=%s user_id=%s org_id=%s",
+            request.method,
+            request.path,
+            response.status_code,
+            duration_ms,
+            getattr(user, 'id', None),
+            getattr(org, 'id', None)
+        )
+
+        response['X-Response-Time-ms'] = str(duration_ms)
+        return response
+
+class DisableCSRFMiddleware:
+    """
+    Disable CSRF checks ONLY for API endpoints.
+    Admin & browser views remain protected.
+    """
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if request.path.startswith("/api/"):
+            setattr(request, "_dont_enforce_csrf_checks", True)
+        return self.get_response(request)

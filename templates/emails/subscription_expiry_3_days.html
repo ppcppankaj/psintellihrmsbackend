@@ -1,0 +1,13 @@
+{% extends "emails/base.html" %}
+{% block content %}
+  <p>Hi {{ organization_name }},</p>
+  <p>Your <strong>{{ plan_name }}</strong> subscription is scheduled to expire on <strong>{{ expiry_date }}</strong>, which is just three days away.</p>
+  <p>Renew now to keep payroll, HR workflows, and compliance automation running without interruption.</p>
+  {% if renewal_link %}
+    <p style="margin: 24px 0;">
+      <a href="{{ renewal_link }}" class="btn">Renew Subscription</a>
+    </p>
+  {% endif %}
+  <p>If you have already completed payment, you can ignore this reminder.</p>
+  <p>Regards,<br/>HRMS Billing Desk</p>
+{% endblock %}
